@@ -1,0 +1,97 @@
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <sys/wait.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <strings.h>
+#include <netinet/tcp.h>
+#include "config.h"
+
+#define MAX_CLIENT 64
+#define NUMBER_OF_PROCESSES 2
+
+void dieWithError(const char *msg)
+{
+	perror(msg);
+	exit(-1);
+}
+
+int main(const int const argc, const char ** const argv)
+{
+	int16_t listenSock;
+	int16_t flags;
+	int32_t status;
+	pid_t pid[NUMBER_OF_PROCESSES];
+	const uint32_t state = 1;
+	struct sockaddr_in servAddr;
+	char listenSock_str[4];
+
+	if (argc != 2)
+		dieWithError("Usage: <port number>");
+
+	if ((listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
+		dieWithError("socket() failed");
+
+	bzero(&servAddr, sizeof(servAddr));
+	servAddr.sin_family = AF_INET;
+	servAddr.sin_addr.s_addr = INADDR_ANY;
+	servAddr.sin_port = htons(atoi(argv[1]));
+
+#ifdef SO_REUSEADDR
+	//allow reuse of port even if it's in TIME_WAIT state
+	if (setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, &state, sizeof(state)) < 0)
+		dieWithError("setsockopt() failed");
+#endif
+
+#ifdef SO_REUSEPORT
+	//allow worker processes open several listening sockets on one port
+	if (setsockopt(listenSock, SOL_SOCKET, SO_REUSEPORT, &state, sizeof(state)) < 0)
+		dieWithError("setsockopt() failed");
+#endif
+	
+	if (bind(listenSock, (struct sockaddr*)&servAddr, sizeof(servAddr)) < 0)
+		dieWithError("bind() failed");
+
+	if ((flags = fcntl(listenSock, F_GETFL)) < 0)
+		dieWithError("fcntl() failed");
+	flags |= O_NONBLOCK;
+	if (fcntl(listenSock, F_SETFL, flags) < 0)
+		dieWithError("fcntl() failed");
+	
+	if (listen(listenSock, MAX_CLIENT) < 0)
+		dieWithError("listen() failed");
+
+	/*convert listenSock to string so we can pass it to 
+	the child processes using execvp with 'args' array*/
+	snprintf(listenSock_str, sizeof(listenSock), "%d", listenSock);
+	char *args[] = {listenSock_str, NULL};
+
+	//create worker processes
+	for (int i = 0;i < NUMBER_OF_PROCESSES; i++)
+	{
+		if ((pid[i] = fork()) < 0)
+			dieWithError("fork() failed");
+		if (pid[i] == 0)
+		{
+			if (execvp(PATH_TO_WORKER, args) < 0)
+				dieWithError("execvp() failed");
+			exit(0);
+		}
+	}
+	//exit(0);
+	//wait for processes to finish
+	for (int i = 0;i < NUMBER_OF_PROCESSES; i++)
+	{
+		waitpid(pid[i], &status, 0);
+		printf("Child with PID: %x finished with status:%d\n", pid[i], status);
+	}
+
+	shutdown(listenSock, 2);
+	close(listenSock);
+	printf("End\n");
+	return 0;
+}

@@ -1,0 +1,13 @@
+html:text/html
+css:text/css
+json:application/json
+js:application/javascript
+jpg:image/jpeg
+jpeg:image/jpeg
+png:image/png
+ico:image/x-icon
+gif:image/gif
+doc:application/msword
+pdf:application/pdf
+ppt:application/vnd.ms-powerpoint
+zip:application/zip
