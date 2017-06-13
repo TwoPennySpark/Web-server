@@ -12,7 +12,6 @@
 #include "config.h"
 
 #define MAX_CLIENT 64
-#define NUMBER_OF_PROCESSES 2
 
 void dieWithError(const char *msg)
 {

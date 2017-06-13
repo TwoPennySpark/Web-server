@@ -57,7 +57,7 @@ void dieWithError(const char *msg)
 
 void add_content_length(char *response, const ssize_t *file_size)
 {
-	char content_length[64];
+	char content_length[64] = "";
 	const uint8_t num_of_digits = snprintf(0, 0, "%ld", *file_size);
 	snprintf(content_length, num_of_digits + 19,"Content-Length: %ld\r\n", *file_size);
 	strncat(response, content_length, strlen(content_length));
@@ -99,7 +99,7 @@ void add_content_type(char *response, const char *path,
 {	/*this function compares extension of a file with extensions
 	from the mime types file and adds it's mime type with a content-type header
 	it also gets mime-encoding using linux comand - file*/
-	char header[64];
+	char header[64] = "";
 	char *content_type;
 	char *extension; 
 	char *line;
@@ -109,7 +109,7 @@ void add_content_type(char *response, const char *path,
   	char output[512];
   	char *content_encoding;
 
-   	char file_command_path[512] = "/usr/bin/file --mime-encoding /root/Desktop/Programmes/socket/webServ_v3.0/english.mirea.ru/";
+   	char file_command_path[512] = "/usr/bin/file --mime-encoding /root/Desktop/Programmes/socket/webServ_v3.0/";
   	strncat(file_command_path, path, strlen(path)); 
 
   	// open the command for reading
@@ -142,7 +142,7 @@ void add_content_type(char *response, const char *path,
 			content_type++;
 			content_type[strlen(content_type) - 1] = '\0';
 
-			bzero(&header, sizeof(header));
+			//bzero(&header, sizeof(header));
 			snprintf(header, strlen(content_type) + 17, "Content-Type: %s\r\n", content_type);
 			//snprintf(header, strlen(content_type) + strlen(content_encoding) + 25,
 			//						 "Content-Type: %s; charset=%s", content_type, content_encoding);
@@ -157,7 +157,7 @@ void add_content_type(char *response, const char *path,
 
 void form_response(char *response, const http_start_string *start_string, 
 								   const http_header_t *headers, 
-								   const ssize_t *size, 
+								   const ssize_t *fileSize, 
 								   FILE *mime_types_file)
 {
 	switch (start_string->http_method)
@@ -171,7 +171,7 @@ void form_response(char *response, const http_start_string *start_string,
 	}
 	add_accept_ranges(response);
 	add_content_type(response, start_string->path, mime_types_file);
-	add_content_length(response, size);
+	add_content_length(response, fileSize);
 	add_connection(response, headers);
 	strncat(response, "\r\n", 2);
 
@@ -182,21 +182,22 @@ void form_response(char *response, const http_start_string *start_string,
 void parse_query_and_send_response(char *query, const uint16_t clntSock, 
 												FILE *mime_types_file)
 {
-	char response[256] = {""};
+	char response[256] = "";
 	char *query_strings[11] = {""};
 	char *first_space;
 	char *second_space;
 	char *header_delim;
-	char string_delim[2] = "\n";
 	struct stat file_info;
 	http_header_t headers[11];
 	http_start_string start_string;
 	uint8_t i = 0;
 	int16_t fd = 0;
 	int64_t total = 0;
+	int64_t offset = 0;
 
 	//extract start string from the query
-	query_strings[0] = strtok(query, string_delim);
+	if ((query_strings[0] = strtok(query, &(char){'\n'})) == NULL)
+		dieWithError("strtok() failed");
 	
 	//headers = calloc(sizeof(http_header_t), i);
 
@@ -205,7 +206,7 @@ void parse_query_and_send_response(char *query, const uint16_t clntSock,
 		dieWithError("[-]no spaces in first string");
 	start_string.method_size = first_space - query_strings[0];
 	first_space++;	
-	if ((second_space = memrchr(query_strings[0], ' ', strlen(query_strings[0]))) < 0)
+	if ((second_space = memrchr(query_strings[0], ' ', strlen(query_strings[0]))) == first_space)
 		dieWithError("[-]can't find second space");
 
 	//determine path to a document and check if it exist
@@ -214,7 +215,7 @@ void parse_query_and_send_response(char *query, const uint16_t clntSock,
 	strncpy(start_string.path, first_space, second_space - first_space);
 
 #ifdef VERBOSE
-	printf("\n[<-] request: %s\n", start_string.path);	
+	printf("\n[<-] request:%s\n", query);//start_string.path);	
 	fflush(stdout);
 #endif
 
@@ -230,7 +231,7 @@ void parse_query_and_send_response(char *query, const uint16_t clntSock,
 	{
 		if (stat(start_string.path, &file_info) < 0)
 		{
-			printf("[-]No such file\n");
+			printf("[-]No such file:{%s}\n", start_string.path);
 			if (send(clntSock, errorMesg, strlen(errorMesg), 0) < 0)
 					dieWithError("send() failed");
 			return;			
@@ -287,7 +288,7 @@ void parse_query_and_send_response(char *query, const uint16_t clntSock,
 	while(1)
 	{
 		i++;
-		query_strings[i] = strtok(NULL, string_delim);
+		query_strings[i] = strtok(NULL, &(char){'\n'});
 
 		//separate until "\n" string
 		if (strlen(query_strings[i]) == 1) 
@@ -309,16 +310,18 @@ void parse_query_and_send_response(char *query, const uint16_t clntSock,
 		 dieWithError("setsockopt() failed");
 	if (send(clntSock, response, strlen(response), 0) < 0)
 		dieWithError("send() failed");
-	while(total < file_info.st_size)
+	while(offset < file_info.st_size)
 	{
-		if (sendfile(clntSock, fd, &total, file_info.st_size - total) < 0)
+		if ((total += sendfile64(clntSock, fd, &offset, file_info.st_size - total)) < 0)
 		{
 			if ((errno == EWOULDBLOCK) || (errno == EAGAIN))
 				break;
 			else
 				dieWithError("sendfile() failed");
 		}
-	}
+		//printf("offset = %ld total = %ld fileSize - offset = %ld\n", offset, total, file_info.st_size - offset);
+ 	}
+
 	if (setsockopt(clntSock, IPPROTO_TCP, TCP_CORK, &(uint32_t){0}, sizeof(uint32_t)) < 0)
 		dieWithError("setsockopt() failed");
 #ifdef VERBOSE			

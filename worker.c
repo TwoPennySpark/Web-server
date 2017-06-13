@@ -11,7 +11,7 @@
 #include "parse.c"
 
 #define BUFFER_SIZE 2048
-#define MAX_CLIENT 64
+#define MAX_CLIENT 512
 
 
 int main(const int const argc, const char* const argv[argc+1])
@@ -27,7 +27,7 @@ int main(const int const argc, const char* const argv[argc+1])
 	char buffer[BUFFER_SIZE];
 	struct sockaddr_in clntAddr;
 	struct epoll_event event;
-	struct epoll_event* events;
+	struct epoll_event events[MAX_CLIENT];
 
 	listenSock = atoi(argv[0]);
 	printf("<%x>\n", getpid());
@@ -46,7 +46,6 @@ int main(const int const argc, const char* const argv[argc+1])
 	if (epoll_ctl(efd, EPOLL_CTL_ADD, listenSock, &event) < 0)
 		dieWithError("epoll_ctl() on listenSock failed");
 
-	events = calloc(MAX_CLIENT, sizeof(event));
 	for (;;)
 	{
 #ifdef VERBOSE
@@ -56,10 +55,10 @@ int main(const int const argc, const char* const argv[argc+1])
 		if ((ready = epoll_wait(efd, events, MAX_CLIENT, -1)) < 0)
 			dieWithError("epoll_wait() failed");
 #ifdef VERBOSE
-		printf("<%x>epoll_wait:%m\n", getpid());
+		printf("<%x>epoll_wait:[%d]\n",getpid(), ready);
 		fflush(stdout);
 #endif 
-		for (int i = 0; i < ready;i++)
+		for (uint16_t i = 0; i < ready;i++)
 		{
 			if ((!(events[i].events & EPOLLIN)) || (events[i].events & EPOLLERR) || (events[i].events & EPOLLHUP))
 			{//Error occured
@@ -67,12 +66,16 @@ int main(const int const argc, const char* const argv[argc+1])
 				printf("[1]<%x>epoll error:%m\n", getpid());
 				fflush(stdout);
 #endif			
-				//shutdown(events[i].data.fd, 2);
-				//close(events[i].data.fd);
+				shutdown(events[i].data.fd, 2);
+				close(events[i].data.fd);
 				continue;
 			}
 			else if (listenSock == events[i].data.fd)
-			{//We have a notification on listenSock which means we have one or more incoming connections
+			{
+				/*We have a notification on listenSock which means we have
+				one or more incoming connections.
+				We use cycle because epoll_wait will only work once on listen 
+				socket even if there is multiply conections incoming*/
 				while(1)
 				{
 #ifdef VERBOSE
@@ -85,7 +88,8 @@ int main(const int const argc, const char* const argv[argc+1])
 						if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
 						{
 #ifdef VERBOSE
-							printf("[*]EAGAIN or EWOULDBLOCK\n");
+							printf("[*]<%x>EAGAIN or EWOULDBLOCK\n"
+							"----------------------------------------------------------------\n", getpid());
 							fflush(stdout);
 #endif
 							break;
@@ -109,21 +113,21 @@ int main(const int const argc, const char* const argv[argc+1])
 
 					/*add a monitor on the socket clntSock to the epoll instance 
 					associated with efd, per the events defined in event
-					(edge-triggered behaviour, available for reading without blocking)*/
+					(level-triggered behaviour, available for reading without blocking)*/
 					event.data.fd = clntSock;
 					event.events = EPOLLIN | EPOLLET;
 					if (epoll_ctl(efd, EPOLL_CTL_ADD, clntSock, &event) < 0)
 						dieWithError("epoll_ctl() on clntSock failed");
 #ifdef VERBOSE
-					printf("[*]<%x>Added {%d}\n", getpid(), clntSock);
+					printf("[*][%d and %d]<%x>Added {%d}\n",i, ready, getpid(), clntSock);
 					fflush(stdout);
 #endif
-					if (--ready <= 0)
-						break;
 				}
+				if ((ready-i-1) <= 0)
+				 	break;
 			}
 			else
-			{
+			{//if there is data on the client socket
 				while(1)
 				{
 #ifdef VERBOSE
@@ -133,12 +137,12 @@ int main(const int const argc, const char* const argv[argc+1])
 					bzero(&buffer, BUFFER_SIZE);
 					if ((recvSize = recv(events[i].data.fd, buffer, BUFFER_SIZE, 0)) < 0)
 					{
-						fflush(stdout);
 						// If errno == EAGAIN, that means we have read all data
 						if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
 						{
 #ifdef VERBOSE
-							printf("[*]{%m}Read all data\n");
+							printf("[*]Read all data\n"
+							"----------------------------------------------------------------\n");
 							fflush(stdout);
 #endif							
 							break;
@@ -159,27 +163,29 @@ int main(const int const argc, const char* const argv[argc+1])
 					else if (recvSize == 0)
 					{
 #ifdef VERBOSE						
-						// End of file. The remote socket has closed the connection
-						printf("[*]<%x>: End of file\n", getpid());
+						//the remote socket has closed the connection
+						printf("[*]<%x>:Remote socket has closed the connection\n", getpid());
 						fflush(stdout);
-
 #endif
 						shutdown(events[i].data.fd, 2);
 						close(events[i].data.fd);
 						break;
 					}
+					//printf("[%d and %d]:recv:\n%s", i, ready, buffer);
 					parse_query_and_send_response(buffer, events[i].data.fd, mime_types_file);
-
-					if (--ready <= 0)
-						break;
 					/*shutdown(events[i].data.fd, 2);
 					close(events[i].data.fd);
 					break;*/
 				}
+				if ((ready-i-1) <= 0)
+					break;
 			}
+// #ifdef VERBOSE						
+// 			printf("[+]End of for\n");
+// 			fflush(stdout);
+// #endif			
 		}
 	}
-	free(events);
 	fclose(mime_types_file);
 	return 0;
 }
