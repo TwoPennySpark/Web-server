@@ -6,6 +6,8 @@
 #include <arpa/inet.h>
 
 #define URI_SIZE 256
+#define NUMBER_OF_HEADERS 11
+#define RESPONSE_HTTP_HEADER_SIZE 256
 #define HTTP_OK "200 OK"
 
 #define three_letter_cmp(method, ch1, ch2, ch3)	\
@@ -14,16 +16,26 @@
 #define  four_letter_cmp(method, ch1, ch2, ch3, ch4) \
 	method[0] == ch1 && method[1] == ch2 && method[2] == ch3 && method[3] == ch4
 
-static const char errorMesg[] = 
+static const char not_found_msg[] = 
 "HTTP/1.1 404 Not Found\r\n"
 "Content-Type: text/html; charset=UTF-8\r\n"
 "Content-Length: 110\r\n"
 "Connection: keep-alive\r\n"
 "Keep-Alive: timeout=10, max=100\r\n"
-"\r\n<HTML>\r\n"
-"<HEAD><title>404 Not Found</title></HEAD>\r\n"
+"\r\n<html>\r\n"
+"<head><title>404 Not Found</title></head>\r\n"
 "<body><center><h1>404 Not Found</h1></center></body>\r\n"
-"</HTML>";
+"</html>";
+
+static const char bad_request_msg[] = 
+"HTTP/1.1 400 Bad Request\r\n"
+"Content-Type: text/html; charset=UTF-8\r\n"
+"Content-Length: 118\r\n"
+"Connection: close\r\n"
+"\r\n<html>\r\n"
+"<head><title>400 Bad Request</title></head>\r\n"
+"<body><center><h1>400 Bad Request</h1></center><body>\r\n"
+"</html>";
 
 typedef enum
 {
@@ -54,6 +66,18 @@ void dieWithError(const char *msg)
 	exit(-1);
 }
 
+void send_bad_request(uint16_t clntSock, char *reason)
+{
+#ifdef VERBOSE
+	printf("[-]%s\n", reason);
+	fflush(stdout);
+#endif
+	if (send(clntSock, bad_request_msg, strlen(bad_request_msg), 0) < 0)
+		dieWithError("send() failed");
+	shutdown(clntSock, 2);
+	close(clntSock);
+	return ;
+}
 
 void add_content_length(char *response, const ssize_t *file_size)
 {
@@ -65,25 +89,27 @@ void add_content_length(char *response, const ssize_t *file_size)
 	return;
 }
 
-
 void add_connection(char *response, const http_header_t *headers)
 {
-	uint8_t i = 0;
-	char connection[57] = "";
-	
-	while(strncmp(headers[i].http_header, "Connection", 10))
-		i++;
-
-	if (!strncmp(headers[i].http_value, "keep-alive", 10))
-		strncat(connection, "Connection: keep-alive\r\n", 24);
-		//strncat(connection, "Connection: keep-alive\r\nKeep-Alive: timeout=100, max=100\r\n\0", 58);
-	else
-		strncat(connection, "Connection: close\r\n\0", 20);
-	strncat(response, connection, strlen(connection));
-
+	for (uint8_t i = 0; i < NUMBER_OF_HEADERS; i++)
+	{
+		if (!strncmp(headers[i].http_header, "Connection", 10))
+		{
+			if (!strncmp(headers[i].http_value, "keep-alive", 10))
+			{
+				strncat(response, "Connection: keep-alive\r\n", 24);
+				//strncat(response, "Connection: keep-alive\r\nKeep-Alive: timeout=100, max=100\r\n\0", 58);
+				return;
+			}
+			else
+			{
+				strncat(response, "Connection: close\r\n", 19);
+				return;
+			}
+		}
+	}
 	return;
 }
-
 
 void add_accept_ranges(char *response)
 {
@@ -93,44 +119,25 @@ void add_accept_ranges(char *response)
 	return;
 }
 
-
 void add_content_type(char *response, const char *path, 
 									  FILE *mime_types_file)
-{	/*this function compares extension of a file with extensions
-	from the mime types file and adds it's mime type with a content-type header
-	it also gets mime-encoding using linux comand - file*/
+{	/* this function compares extension of a file with extensions
+	 * from the mime types file and adds it's mime type with a content-type header
+	 */
 	char header[64] = "";
 	char *content_type;
 	char *extension; 
 	char *line;
 	size_t n = 0;
 
-	/*FILE *fp;
-  	char output[512];
-  	char *content_encoding;
-
-   	char file_command_path[512] = "/usr/bin/file --mime-encoding /root/Desktop/Programmes/socket/webServ_v3.0/";
-  	strncat(file_command_path, path, strlen(path)); 
-
-  	// open the command for reading
-  	if ((fp = popen(file_command_path, "r")) == NULL)
-  		dieWithError("popen() failed");
-
-  	// read the output 
-  	if (fgets(output, 512, fp) < 0)
-  		dieWithError("fgets() failed");
-  	content_encoding = memrchr(output, ' ', strlen(output));
-  	content_encoding++;
-
-  	pclose(fp);*/
-
 	extension = memrchr(path, '.', strlen(path));
 	extension++;
-	/*The reason why i am setting last symbol as ':' is because i want to be sure
-	that the type that i will read from file will exactly match with length of extension 
-	that i've got, for example if extension is .js and i look through mime types file and find 
-	"json:application/javascript" record, the program will work incorrectly,
-	 but if i leave ':' at the end it will only concur with "js:application/javascript"*/	
+	/* The reason why i am setting last symbol as ':' is because i want to be sure
+	 * that the type that i will read from file will exactly match with length of extension 
+	 * that i've got, for example if extension is .js and i look through mime types file and find 
+	 * "json:application/javascript" record, the program will work incorrectly,
+	 * but if i leave ':' at the end it will only concur with "js:application/javascript"
+	 */	
 	extension[strlen(extension)] = ':';
 
 	fseek(mime_types_file, SEEK_SET, 0);
@@ -142,7 +149,6 @@ void add_content_type(char *response, const char *path,
 			content_type++;
 			content_type[strlen(content_type) - 1] = '\0';
 
-			//bzero(&header, sizeof(header));
 			snprintf(header, strlen(content_type) + 17, "Content-Type: %s\r\n", content_type);
 			//snprintf(header, strlen(content_type) + strlen(content_encoding) + 25,
 			//						 "Content-Type: %s; charset=%s", content_type, content_encoding);
@@ -153,7 +159,6 @@ void add_content_type(char *response, const char *path,
 
 	return;
 }
-
 
 void form_response(char *response, const http_start_string *start_string, 
 								   const http_header_t *headers, 
@@ -178,46 +183,52 @@ void form_response(char *response, const http_start_string *start_string,
 	return;
 }
 
-
-void parse_query_and_send_response(char *query, const uint16_t clntSock, 
+int parse_query_and_send_response(char *query, const uint16_t clntSock, 
 												FILE *mime_types_file)
 {
-	char response[256] = "";
-	char *query_strings[11] = {""};
 	char *first_space;
 	char *second_space;
 	char *header_delim;
-	struct stat file_info;
-	http_header_t headers[11];
+	char *query_strings[NUMBER_OF_HEADERS] = {""};
+	char response[RESPONSE_HTTP_HEADER_SIZE] = "";
+	http_header_t headers[NUMBER_OF_HEADERS];
 	http_start_string start_string;
-	uint8_t i = 0;
+	struct stat file_info;
+	uint8_t i = 1;
 	int16_t fd = 0;
-	int64_t total = 0;
+	int16_t flags = 0;
 	int64_t offset = 0;
+	char delim = '\n';
 
 	//extract start string from the query
-	if ((query_strings[0] = strtok(query, &(char){'\n'})) == NULL)
-		dieWithError("strtok() failed");
+	if ((query_strings[0] = strtok(query, &delim)) == NULL)
+	{
+		send_bad_request(clntSock, "strtok() failed");
+		return -1;
+	}
 	
-	//headers = calloc(sizeof(http_header_t), i);
+#ifdef VERBOSE
+	printf("\n[<-] request:%s\n", query);	
+	fflush(stdout);
+#endif
 
 	//determine http method size, use later to identify which one exactly
 	if ((first_space = memchr(query_strings[0], ' ',strlen(query_strings[0]))) < 0)
-		dieWithError("[-]no spaces in first string");
+	{//[-]no space in the 1st string
+		send_bad_request(clntSock, "[-]{memchr() failed} No space in the 1st string");
+		return -1;
+	}
 	start_string.method_size = first_space - query_strings[0];
-	first_space++;	
 	if ((second_space = memrchr(query_strings[0], ' ', strlen(query_strings[0]))) == first_space)
-		dieWithError("[-]can't find second space");
+	{//[-]can't find second space
+		send_bad_request(clntSock, "[-]{memrchr() failed} Can't find second space");
+		return -1;
+	}
 
 	//determine path to a document and check if it exist
-	++first_space;
+	first_space += 2;
 	bzero(&start_string.path, sizeof(start_string.path));
 	strncpy(start_string.path, first_space, second_space - first_space);
-
-#ifdef VERBOSE
-	printf("\n[<-] request:%s\n", query);//start_string.path);	
-	fflush(stdout);
-#endif
 
 	if (!strlen(start_string.path))
 	{
@@ -231,23 +242,27 @@ void parse_query_and_send_response(char *query, const uint16_t clntSock,
 	{
 		if (stat(start_string.path, &file_info) < 0)
 		{
+#ifdef VERBOSE
 			printf("[-]No such file:{%s}\n", start_string.path);
-			if (send(clntSock, errorMesg, strlen(errorMesg), 0) < 0)
+			fflush(stdout);
+#endif
+			if (send(clntSock, not_found_msg, strlen(not_found_msg), 0) < 0)
 					dieWithError("send() failed");
-			return;			
+			return 0;			
 		}
 		if (!S_ISREG(file_info.st_mode))
 		{
 			printf("[-]Requested file isn't a regular file\n");
-			if (send(clntSock, errorMesg, strlen(errorMesg), 0) < 0)
+			if (send(clntSock, not_found_msg, strlen(not_found_msg), 0) < 0)
 					dieWithError("send() failed");
-			return;
+			return 0;
 		}
 		if ((fd = open(start_string.path, O_RDONLY)) < 0)
 			dieWithError("open() failed");
 	}
 
-	switch (start_string.method_size)
+	//determine http method
+	switch(start_string.method_size)
 	{
 		case 3:
 			{
@@ -278,25 +293,26 @@ void parse_query_and_send_response(char *query, const uint16_t clntSock,
 				}
 			}
 		default:
-			dieWithError("[-]unknown method");
-	} 
+		{
+			send_bad_request(clntSock, "[-]unknown method");
+			return -1;
+		}
+	}
+
 	start_string.http_protocol = ++second_space;
 	start_string.http_protocol[strlen(start_string.http_protocol) - 1] = '\0';
 	bzero(&headers, sizeof(headers));
 
 	//separate strings in a query, than divide them on headers and values
-	while(1)
+	while((query_strings[i] = strtok(NULL, &delim)))
 	{
-		i++;
-		query_strings[i] = strtok(NULL, &(char){'\n'});
-
 		//separate until "\n" string
-		if (strlen(query_strings[i]) == 1) 
+		if ((header_delim = memchr(query_strings[i], ':', strlen(query_strings[i]))) == NULL)
 			break;
 
-		header_delim = memchr(query_strings[i], ':', strlen(query_strings[i]));
 		strncpy(headers[i-1].http_header, query_strings[i], header_delim - query_strings[i]);
 		strncpy(headers[i-1].http_value , header_delim+2, strlen(header_delim));
+		i++;
 	}
 	form_response(response, &start_string, headers, &file_info.st_size, mime_types_file);
 
@@ -304,31 +320,79 @@ void parse_query_and_send_response(char *query, const uint16_t clntSock,
 	printf("[->]response:%m\n%s", response);
 	fflush(stdout);
 #endif
+
+	/* disabling non-blocking mode when transfering files with size > 100kB
+	 * because one average call to sendfile function with non-blocking socket 
+	 * transfers < 100kB without EWOULDBLOCK error, the transfer of larger files  
+	 * will cause program to call sendfile function from 10 to 500 times, every
+	 * time returning with EWOULDBLOCK error
+	 */
+	if (file_info.st_size > 100000)
+		if (fcntl(clntSock, F_SETFL, flags) < 0)
+			dieWithError("fcntl() failed");
+
 	if (setsockopt(clntSock, IPPROTO_TCP, TCP_QUICKACK, &(uint32_t){1}, sizeof(uint32_t)) < 0)
 	 	dieWithError("setsockopt() failed");
+
+	//using TCP_CORK to combine http header and sent data
 	if (setsockopt(clntSock, IPPROTO_TCP, TCP_CORK, &(uint32_t){1}, sizeof(uint32_t)) < 0)
 		 dieWithError("setsockopt() failed");
+
+	//send http header	
 	if (send(clntSock, response, strlen(response), 0) < 0)
-		dieWithError("send() failed");
+	{
+		if (errno == ECONNRESET)
+		{
+#ifdef VERBOSE
+			printf("[*]Connection on socket %d reset by client\n", clntSock);
+			fflush(stdout);
+#endif
+			shutdown(clntSock, 2);
+			close(clntSock);
+			return -1;
+		}
+		else
+			dieWithError("send() failed");
+	}
+	
+	//send file
 	while(offset < file_info.st_size)
 	{
-		if ((total += sendfile64(clntSock, fd, &offset, file_info.st_size - total)) < 0)
+		if (sendfile(clntSock, fd, &offset, file_info.st_size - offset) < 0)
 		{
 			if ((errno == EWOULDBLOCK) || (errno == EAGAIN))
+			{
+#ifdef VERBOSE				
+				printf("EWOULDBLOCK or EAGAIN\n");	
+				fflush(stdout);
+#endif
 				break;
+			}
 			else
 				dieWithError("sendfile() failed");
 		}
-		//printf("offset = %ld total = %ld fileSize - offset = %ld\n", offset, total, file_info.st_size - offset);
+#ifdef VERBOSE
+		printf("offset = %ld fileSize - offset = %ld\n", offset, file_info.st_size - offset);
+		fflush(stdout);
+#endif 	
  	}
 
 	if (setsockopt(clntSock, IPPROTO_TCP, TCP_CORK, &(uint32_t){0}, sizeof(uint32_t)) < 0)
 		dieWithError("setsockopt() failed");
+
+ 	if (file_info.st_size > 100000)
+ 	{
+	 	if ((flags = fcntl(clntSock, F_GETFL)) < 0)
+			dieWithError("fcntl() failed");
+		flags |= O_NONBLOCK;
+		if (fcntl(clntSock, F_SETFL, flags) < 0)
+			dieWithError("fcntl() failed");
+	}
 #ifdef VERBOSE			
-	printf("[->]<%x>Send on sock:%d size:%ld file:%s\n\n", getpid(), clntSock, total, start_string.path);
+	printf("[->]<%x>Send on sock:%d file:%s\n\n", getpid(), clntSock, start_string.path);
 	fflush(stdout);
 #endif	
 	close(fd);
 
-	return;
+	return 0;
 }

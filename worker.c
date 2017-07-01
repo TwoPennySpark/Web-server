@@ -11,7 +11,7 @@
 #include "parse.c"
 
 #define BUFFER_SIZE 2048
-#define MAX_CLIENT 512
+#define MAX_CLIENT 128
 
 
 int main(const int const argc, const char* const argv[argc+1])
@@ -38,9 +38,10 @@ int main(const int const argc, const char* const argv[argc+1])
 	if ((efd = epoll_create(MAX_CLIENT)) < 0)
 		dieWithError("epoll_create() failed");
 
-	/*add a monitor on the socket listenSock to the epoll instance 
-	associated with efd, per the events defined in event
-	(edge-triggered behaviour, available to read without blocking)*/
+	/* add a monitor on the listenSock to the epoll instance 
+	 * associated with efd, per the events defined in event
+	 * (edge-triggered behaviour, available to read without blocking)
+	 */
 	event.data.fd = listenSock;
 	event.events = EPOLLIN | EPOLLET;
 	if (epoll_ctl(efd, EPOLL_CTL_ADD, listenSock, &event) < 0)
@@ -49,7 +50,7 @@ int main(const int const argc, const char* const argv[argc+1])
 	for (;;)
 	{
 #ifdef VERBOSE
-		printf("<%x>before epoll_wait:%m\n", getpid());
+		printf("<%x>before epoll_wait\n", getpid());
 		fflush(stdout);
 #endif 
 		if ((ready = epoll_wait(efd, events, MAX_CLIENT, -1)) < 0)
@@ -61,7 +62,7 @@ int main(const int const argc, const char* const argv[argc+1])
 		for (uint16_t i = 0; i < ready;i++)
 		{
 			if ((!(events[i].events & EPOLLIN)) || (events[i].events & EPOLLERR) || (events[i].events & EPOLLHUP))
-			{//Error occured
+			{//error occured
 #ifdef VERBOSE
 				printf("[1]<%x>epoll error:%m\n", getpid());
 				fflush(stdout);
@@ -72,10 +73,11 @@ int main(const int const argc, const char* const argv[argc+1])
 			}
 			else if (listenSock == events[i].data.fd)
 			{
-				/*We have a notification on listenSock which means we have
-				one or more incoming connections.
-				We use cycle because epoll_wait will only work once on listen 
-				socket even if there is multiply conections incoming*/
+				/*we have a notification on listenSock which means we have
+				 * one or more incoming connections
+				 * we use cycle because epoll_wait will only work once on listen 
+				 * socket even if there is multiply conections incoming
+				 */
 				while(1)
 				{
 #ifdef VERBOSE
@@ -89,7 +91,7 @@ int main(const int const argc, const char* const argv[argc+1])
 						{
 #ifdef VERBOSE
 							printf("[*]<%x>EAGAIN or EWOULDBLOCK\n"
-							"----------------------------------------------------------------\n", getpid());
+							"--------------------------------------------------------------------------------------\n", getpid());
 							fflush(stdout);
 #endif
 							break;
@@ -111,15 +113,22 @@ int main(const int const argc, const char* const argv[argc+1])
 					if (fcntl(clntSock, F_SETFL, flags) < 0)
 						dieWithError("fcntl() failed");
 
-					/*add a monitor on the socket clntSock to the epoll instance 
-					associated with efd, per the events defined in event
-					(level-triggered behaviour, available for reading without blocking)*/
+					/* disable Nagle's algotithm, forcing a socket to send 
+					 * the data in it's buffer, whatever the packet size is
+					 */ 
+					if (setsockopt(clntSock, IPPROTO_TCP, TCP_NODELAY, &(uint32_t){1}, sizeof(uint32_t)) < 0)
+						dieWithError("setsockopt() failed");
+
+				   	/* add a monitor on the clntSock to the epoll instance 
+					 * associated with efd, per the events defined in event
+					 * (edge-triggered behaviour, available for reading without blocking)
+					 */
 					event.data.fd = clntSock;
 					event.events = EPOLLIN | EPOLLET;
 					if (epoll_ctl(efd, EPOLL_CTL_ADD, clntSock, &event) < 0)
 						dieWithError("epoll_ctl() on clntSock failed");
 #ifdef VERBOSE
-					printf("[*][%d and %d]<%x>Added {%d}\n",i, ready, getpid(), clntSock);
+					printf("[*]<%x>Added {%d}\n", getpid(), clntSock);
 					fflush(stdout);
 #endif
 				}
@@ -137,24 +146,14 @@ int main(const int const argc, const char* const argv[argc+1])
 					bzero(&buffer, BUFFER_SIZE);
 					if ((recvSize = recv(events[i].data.fd, buffer, BUFFER_SIZE, 0)) < 0)
 					{
-						// If errno == EAGAIN, that means we have read all data
+						// If errno == EWOULDBLOCK, that means we have read all data
 						if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
 						{
 #ifdef VERBOSE
 							printf("[*]Read all data\n"
-							"----------------------------------------------------------------\n");
+							"--------------------------------------------------------------------------------------\n");
 							fflush(stdout);
 #endif							
-							break;
-						}
-						else if (errno == ECONNRESET)
-						{
-#ifdef VERBOSE
-							printf("[*]Connection on socket %d reset by client\n", events[i].data.fd);
-							fflush(stdout);
-#endif
-							shutdown(events[i].data.fd, 2);
-							close(events[i].data.fd);
 							break;
 						}
 						else 
@@ -171,14 +170,9 @@ int main(const int const argc, const char* const argv[argc+1])
 						close(events[i].data.fd);
 						break;
 					}
-					//printf("[%d and %d]:recv:\n%s", i, ready, buffer);
-					parse_query_and_send_response(buffer, events[i].data.fd, mime_types_file);
-					/*shutdown(events[i].data.fd, 2);
-					close(events[i].data.fd);
-					break;*/
+					if (parse_query_and_send_response(buffer, events[i].data.fd, mime_types_file) < 0)
+						break;
 				}
-				if ((ready-i-1) <= 0)
-					break;
 			}
 // #ifdef VERBOSE						
 // 			printf("[+]End of for\n");
@@ -189,13 +183,3 @@ int main(const int const argc, const char* const argv[argc+1])
 	fclose(mime_types_file);
 	return 0;
 }
-
-/*EAGAIN is often raised when performing non-blocking I/O. It means "there is no data available right now, try again later".
-  It might (or might not) be the same as EWOULDBLOCK, which means "your thread would have to block in order to do that".
-  EAGAIN & EWOULDBLOCK: Operation would have caused the process to be suspended.*/
-/*strdup() to copy whole string into the other string and strcpy() to copy part of the string*/
-/*Can't set timeout for non-blocking sockets*/
-/*There are 2 types of http connections: persistent and non-persistent(those are opening new tcp connection each time it request for a file)*/
-/*If you writing a server with a select() function waiting for connection before accept() call, than it might happen that after select 
-will be triggered, the program will not immediately call accept() and if in that amount of time client sends RST flag, than the program 
-will block in accept() until next connection*/

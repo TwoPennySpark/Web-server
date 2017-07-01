@@ -24,9 +24,8 @@ int main(const int const argc, const char ** const argv)
 	int16_t listenSock;
 	int16_t flags;
 	int32_t status;
-	pid_t pid[NUMBER_OF_PROCESSES];
-	const uint32_t state = 1;
 	struct sockaddr_in servAddr;
+	pid_t pid[NUMBER_OF_PROCESSES];
 	char listenSock_str[4];
 
 	if (argc != 2)
@@ -35,6 +34,7 @@ int main(const int const argc, const char ** const argv)
 	if ((listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
 		dieWithError("socket() failed");
 
+//	servAddr = (struct sockaddr_in) {AF_INET,htons(atoi(argv[1])),INADDR_ANY };
 	bzero(&servAddr, sizeof(servAddr));
 	servAddr.sin_family = AF_INET;
 	servAddr.sin_addr.s_addr = INADDR_ANY;
@@ -42,15 +42,15 @@ int main(const int const argc, const char ** const argv)
 
 #ifdef SO_REUSEADDR
 	//allow reuse of port even if it's in TIME_WAIT state
-	if (setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, &state, sizeof(state)) < 0)
+	if (setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, &(uint32_t){1}, sizeof(uint32_t)) < 0)
 		dieWithError("setsockopt() failed");
 #endif
 
-#ifdef SO_REUSEPORT
-	//allow worker processes open several listening sockets on one port
-	if (setsockopt(listenSock, SOL_SOCKET, SO_REUSEPORT, &state, sizeof(state)) < 0)
-		dieWithError("setsockopt() failed");
-#endif
+// #ifdef SO_REUSEPORT
+// 	//allow worker processes open several listening sockets on one port
+// 	if (setsockopt(listenSock, SOL_SOCKET, SO_REUSEPORT, &(uint32_t){1}, sizeof(uint32_t)) < 0)
+// 		dieWithError("setsockopt() failed");
+// #endif
 	
 	if (bind(listenSock, (struct sockaddr*)&servAddr, sizeof(servAddr)) < 0)
 		dieWithError("bind() failed");
@@ -64,13 +64,14 @@ int main(const int const argc, const char ** const argv)
 	if (listen(listenSock, MAX_CLIENT) < 0)
 		dieWithError("listen() failed");
 
-	/*convert listenSock to string so we can pass it to 
-	the child processes using execvp with 'args' array*/
+	/* convert listenSock to string so we can pass it to 
+	 * the child processes using execvp with 'args' array
+	 */
 	snprintf(listenSock_str, sizeof(listenSock), "%d", listenSock);
 	char *args[] = {listenSock_str, NULL};
 
 	//create worker processes
-	for (int i = 0;i < NUMBER_OF_PROCESSES; i++)
+	for (uint8_t i = 0;i < NUMBER_OF_PROCESSES; i++)
 	{
 		if ((pid[i] = fork()) < 0)
 			dieWithError("fork() failed");
@@ -81,9 +82,11 @@ int main(const int const argc, const char ** const argv)
 			exit(0);
 		}
 	}
+
 	//exit(0);
+
 	//wait for processes to finish
-	for (int i = 0;i < NUMBER_OF_PROCESSES; i++)
+	for (uint8_t i = 0;i < NUMBER_OF_PROCESSES; i++)
 	{
 		waitpid(pid[i], &status, 0);
 		printf("Child with PID: %x finished with status:%d\n", pid[i], status);
