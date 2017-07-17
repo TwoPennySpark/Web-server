@@ -1,9 +1,9 @@
+#include <arpa/inet.h>
+#include <netinet/tcp.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <sys/sendfile.h>
-#include <netinet/tcp.h>
-#include <arpa/inet.h>
 
 #define URI_SIZE 256
 #define NUMBER_OF_HEADERS 11
@@ -16,7 +16,7 @@
 #define  four_letter_cmp(method, ch1, ch2, ch3, ch4) \
 	method[0] == ch1 && method[1] == ch2 && method[2] == ch3 && method[3] == ch4
 
-static const char not_found_msg[] = 
+static const char const not_found_msg[] = 
 "HTTP/1.1 404 Not Found\r\n"
 "Content-Type: text/html; charset=UTF-8\r\n"
 "Content-Length: 110\r\n"
@@ -27,7 +27,7 @@ static const char not_found_msg[] =
 "<body><center><h1>404 Not Found</h1></center></body>\r\n"
 "</html>";
 
-static const char bad_request_msg[] = 
+static const char const bad_request_msg[] = 
 "HTTP/1.1 400 Bad Request\r\n"
 "Content-Type: text/html; charset=UTF-8\r\n"
 "Content-Length: 118\r\n"
@@ -60,13 +60,13 @@ typedef struct
 }http_header_t;
 
 
-void dieWithError(const char *msg)
+void dieWithError(const char const *msg)
 {
 	perror(msg);
 	exit(-1);
 }
 
-void send_bad_request(uint16_t clntSock, char *reason)
+void send_bad_request(const uint16_t const clntSock, const char const *reason)
 {
 #ifdef VERBOSE
 	printf("[-]%s\n", reason);
@@ -79,7 +79,7 @@ void send_bad_request(uint16_t clntSock, char *reason)
 	return ;
 }
 
-void add_content_length(char *response, const ssize_t *file_size)
+void add_content_length(char *response, const ssize_t const *file_size)
 {
 	char content_length[64] = "";
 	const uint8_t num_of_digits = snprintf(0, 0, "%ld", *file_size);
@@ -89,7 +89,7 @@ void add_content_length(char *response, const ssize_t *file_size)
 	return;
 }
 
-void add_connection(char *response, const http_header_t *headers)
+void add_connection(char *response, const http_header_t const *headers)
 {
 	for (uint8_t i = 0; i < NUMBER_OF_HEADERS; i++)
 	{
@@ -97,8 +97,8 @@ void add_connection(char *response, const http_header_t *headers)
 		{
 			if (!strncmp(headers[i].http_value, "keep-alive", 10))
 			{
-				strncat(response, "Connection: keep-alive\r\n", 24);
-				//strncat(response, "Connection: keep-alive\r\nKeep-Alive: timeout=100, max=100\r\n\0", 58);
+				//strncat(response, "Connection: keep-alive\r\n", 24);
+				strncat(response, "Connection: keep-alive\r\nKeep-Alive: timeout=100, max=100\r\n", 58);
 				return;
 			}
 			else
@@ -119,7 +119,7 @@ void add_accept_ranges(char *response)
 	return;
 }
 
-void add_content_type(char *response, const char *path, 
+void add_content_type(char *response, const char const *path, 
 									  FILE *mime_types_file)
 {	/* this function compares extension of a file with extensions
 	 * from the mime types file and adds it's mime type with a content-type header
@@ -160,14 +160,14 @@ void add_content_type(char *response, const char *path,
 	return;
 }
 
-void form_response(char *response, const http_start_string *start_string, 
-								   const http_header_t *headers, 
-								   const ssize_t *fileSize, 
+void form_response(char *response, const http_start_string const *start_string, 
+								   const http_header_t const *headers, 
+								   const ssize_t const *fileSize, 
 								   FILE *mime_types_file)
 {
 	switch (start_string->http_method)
 	{
-		case 0:
+		case HTTP_GET:
 		{
 			snprintf(response, strlen(HTTP_OK) + strlen(start_string->http_protocol) + 4,
 									"%s %s\r\n", start_string->http_protocol, HTTP_OK);
@@ -321,18 +321,9 @@ int parse_query_and_send_response(char *query, const uint16_t clntSock,
 	fflush(stdout);
 #endif
 
-	/* disabling non-blocking mode when transfering files with size > 100kB
-	 * because one average call to sendfile function with non-blocking socket 
-	 * transfers < 100kB without EWOULDBLOCK error, the transfer of larger files  
-	 * will cause program to call sendfile function from 10 to 500 times, every
-	 * time returning with EWOULDBLOCK error
-	 */
-	if (file_info.st_size > 100000)
-		if (fcntl(clntSock, F_SETFL, flags) < 0)
-			dieWithError("fcntl() failed");
-
-	if (setsockopt(clntSock, IPPROTO_TCP, TCP_QUICKACK, &(uint32_t){1}, sizeof(uint32_t)) < 0)
-	 	dieWithError("setsockopt() failed");
+	flags = 0;
+	if (fcntl(clntSock, F_SETFL, flags) < 0)
+		dieWithError("fcntl() failed");
 
 	//using TCP_CORK to combine http header and sent data
 	if (setsockopt(clntSock, IPPROTO_TCP, TCP_CORK, &(uint32_t){1}, sizeof(uint32_t)) < 0)
@@ -380,14 +371,12 @@ int parse_query_and_send_response(char *query, const uint16_t clntSock,
 	if (setsockopt(clntSock, IPPROTO_TCP, TCP_CORK, &(uint32_t){0}, sizeof(uint32_t)) < 0)
 		dieWithError("setsockopt() failed");
 
- 	if (file_info.st_size > 100000)
- 	{
-	 	if ((flags = fcntl(clntSock, F_GETFL)) < 0)
-			dieWithError("fcntl() failed");
-		flags |= O_NONBLOCK;
-		if (fcntl(clntSock, F_SETFL, flags) < 0)
-			dieWithError("fcntl() failed");
-	}
+	if ((flags = fcntl(clntSock, F_GETFL)) < 0)
+		dieWithError("fcntl() failed");
+	flags |= O_NONBLOCK;
+	if (fcntl(clntSock, F_SETFL, flags) < 0)
+		dieWithError("fcntl() failed");
+
 #ifdef VERBOSE			
 	printf("[->]<%x>Send on sock:%d file:%s\n\n", getpid(), clntSock, start_string.path);
 	fflush(stdout);

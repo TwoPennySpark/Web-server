@@ -28,30 +28,18 @@ int main(const int const argc, const char ** const argv)
 	pid_t pid[NUMBER_OF_PROCESSES];
 	char listenSock_str[4];
 
-	if (argc != 2)
-		dieWithError("Usage: <port number>");
-
 	if ((listenSock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP)) < 0)
 		dieWithError("socket() failed");
 
-//	servAddr = (struct sockaddr_in) {AF_INET,htons(atoi(argv[1])),INADDR_ANY };
 	bzero(&servAddr, sizeof(servAddr));
 	servAddr.sin_family = AF_INET;
 	servAddr.sin_addr.s_addr = INADDR_ANY;
-	servAddr.sin_port = htons(atoi(argv[1]));
+	servAddr.sin_port = htons(LPORT);
 
-#ifdef SO_REUSEADDR
 	//allow reuse of port even if it's in TIME_WAIT state
 	if (setsockopt(listenSock, SOL_SOCKET, SO_REUSEADDR, &(uint32_t){1}, sizeof(uint32_t)) < 0)
 		dieWithError("setsockopt() failed");
-#endif
 
-// #ifdef SO_REUSEPORT
-// 	//allow worker processes open several listening sockets on one port
-// 	if (setsockopt(listenSock, SOL_SOCKET, SO_REUSEPORT, &(uint32_t){1}, sizeof(uint32_t)) < 0)
-// 		dieWithError("setsockopt() failed");
-// #endif
-	
 	if (bind(listenSock, (struct sockaddr*)&servAddr, sizeof(servAddr)) < 0)
 		dieWithError("bind() failed");
 
@@ -83,8 +71,6 @@ int main(const int const argc, const char ** const argv)
 		}
 	}
 
-	//exit(0);
-
 	//wait for processes to finish
 	for (uint8_t i = 0;i < NUMBER_OF_PROCESSES; i++)
 	{
@@ -94,6 +80,6 @@ int main(const int const argc, const char ** const argv)
 
 	shutdown(listenSock, 2);
 	close(listenSock);
-	printf("End\n");
+
 	return 0;
 }

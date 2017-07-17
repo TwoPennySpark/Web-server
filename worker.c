@@ -1,24 +1,22 @@
 #define _GNU_SOURCE
+#include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <sys/epoll.h>
 #include <unistd.h>
-#include <string.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <stdint.h>
 #include "config.h"
 #include "parse.c"
 
 #define BUFFER_SIZE 2048
 #define MAX_CLIENT 128
 
-
-int main(const int const argc, const char* const argv[argc+1])
+int main(const int const argc, const char* const argv[])
 {
 	uint16_t listenSock;
 	int16_t clntSock;
-	int16_t flags;
 	int16_t ready;
 	int16_t efd;
 	int32_t recvSize;
@@ -73,7 +71,7 @@ int main(const int const argc, const char* const argv[argc+1])
 			}
 			else if (listenSock == events[i].data.fd)
 			{
-				/*we have a notification on listenSock which means we have
+				/* we have a notification on listenSock which means we have
 				 * one or more incoming connections
 				 * we use cycle because epoll_wait will only work once on listen 
 				 * socket even if there is multiply conections incoming
@@ -85,7 +83,7 @@ int main(const int const argc, const char* const argv[argc+1])
 					fflush(stdout);
 #endif
 					clntLen = sizeof(clntAddr);
-					if ((clntSock = accept(listenSock, (struct sockaddr*)&clntAddr, &clntLen)) < 0)
+					if ((clntSock = accept4(listenSock, (struct sockaddr*)&clntAddr, &clntLen, SOCK_NONBLOCK)) < 0)
 					{//break when all connections are handled
 						if ((errno == EAGAIN) || (errno == EWOULDBLOCK))
 						{
@@ -105,13 +103,6 @@ int main(const int const argc, const char* const argv[argc+1])
 																	ntohs(clntAddr.sin_port));
 					fflush(stdout);
 #endif
-					
-					//set new socket nonblocking
-					if ((flags = fcntl(clntSock, F_GETFL)) < 0)
-						dieWithError("fcntl() failed");
-					flags |= O_NONBLOCK;
-					if (fcntl(clntSock, F_SETFL, flags) < 0)
-						dieWithError("fcntl() failed");
 
 					/* disable Nagle's algotithm, forcing a socket to send 
 					 * the data in it's buffer, whatever the packet size is
@@ -143,6 +134,8 @@ int main(const int const argc, const char* const argv[argc+1])
 					printf("[3]<%x>Data on clntSock\nevents[%d].data.fd = %d\n", getpid(), i, events[i].data.fd);
 					fflush(stdout);
 #endif
+					if (setsockopt(events[i].data.fd, IPPROTO_TCP, TCP_QUICKACK, &(uint32_t){1}, sizeof(uint32_t)) < 0)
+						dieWithError("TCP_QUICKACK failed");
 					bzero(&buffer, BUFFER_SIZE);
 					if ((recvSize = recv(events[i].data.fd, buffer, BUFFER_SIZE, 0)) < 0)
 					{
@@ -174,10 +167,6 @@ int main(const int const argc, const char* const argv[argc+1])
 						break;
 				}
 			}
-// #ifdef VERBOSE						
-// 			printf("[+]End of for\n");
-// 			fflush(stdout);
-// #endif			
 		}
 	}
 	fclose(mime_types_file);
